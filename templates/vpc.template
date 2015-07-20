@@ -1,0 +1,326 @@
+{
+"AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "02_vpc_high_availability",
+    "Metadata": {
+
+    },
+    "Parameters": {
+      "KeyName" : {
+        "Description" : "Name of the keypair used to access the NatInstances",
+        "Type" : "String"
+      },
+      "VpcCidrBlock" : {
+        "Description" : "The CIDR block for the VPC",
+        "Default" : "10.1.0.0/16",
+        "Type" : "String"
+      },
+      "Az1PublicCidrBlock" : {
+        "Description" : "The CIDR block for the Public Subnet",
+        "Default" : "10.1.1.0/24",
+        "Type" : "String"
+      },
+      "Az2PublicCidrBlock" : {
+        "Description" : "The CIDR block for the Private Subnet",
+        "Default" : "10.1.2.0/24",
+        "Type" : "String"
+      }, 
+      "Az1PrivateCidrBlock" : {
+        "Description" : "The CIDR block for the Public Subnet",
+        "Default" : "10.1.32.0/24",
+        "Type" : "String"
+      },
+      "Az2PrivateCidrBlock" : {
+        "Description" : "The CIDR block for the Private Subnet",
+        "Default" : "10.1.33.0/24",
+        "Type" : "String"
+      },
+      "NatInstanceType" : {
+        "Description" : "Instance Type for the NAT Instances",
+        "Default" : "t2.micro",
+        "Type" : "String"
+      }
+    },
+    "Mappings" : {
+      "Region2AZs" : {
+        "us-east-1" : { "AZ1" : "us-east-1a", "AZ2" : "us-east-1b", "AZ3" : "us-east-1c", "AZ4" : "us-east-1e" },
+        "us-west-1" : { "AZ1" : "us-west-1a", "AZ2" : "us-west-1b" },
+        "us-west-2" : { "AZ1" : "us-west-2a", "AZ2" : "us-west-2b", "AZ3" : "us-west-2c" },
+        "eu-west-1" : { "AZ1" : "eu-west-1a", "AZ2" : "eu-west-1b", "AZ3" : "eu-west-1c" },
+        "eu-central-1" : { "AZ1" : "eu-central-1a", "AZ2" : "eu-central-1b" }
+      },
+      "Region2Ami" : {
+        "us-east-1" : { "AMI" : "ami-1ecae776"},
+        "us-west-1" : { "AMI" : "ami-e7527ed7"},
+        "us-west-2" : { "AMI" : "ami-d114f295"},
+        "eu-west-1" : { "AMI" : "ami-a10897d6"},
+        "eu-central-1" : { "AMI" : "ami-a8221fb5"}
+      }
+    },
+    "Resources": {
+      "VPC" : {
+        "Type" : "AWS::EC2::VPC",
+        "Properties" : {
+          "CidrBlock" : { "Ref" : "VpcCidrBlock" },
+          "EnableDnsHostnames" : "true"
+        }
+      },
+      "Az1PublicSubnet" : {
+        "Type" : "AWS::EC2::Subnet",
+        "Properties" : {
+          "CidrBlock" : { "Ref" : "Az1PublicCidrBlock" },
+          "VpcId" : { "Ref" : "VPC" },
+          "AvailabilityZone" : { "Fn::FindInMap" : [ "Region2AZs", { "Ref" : "AWS::Region" }, "AZ1" ] },
+          "Tags" : [ { "Key" : "Name", "Value" : "PublicAz1" } ]
+        }
+      },
+      "Az2PublicSubnet" : {
+        "Type" : "AWS::EC2::Subnet",
+        "Properties" : {
+          "CidrBlock" : { "Ref" : "Az2PublicCidrBlock" },
+          "VpcId" : { "Ref" : "VPC" },
+          "AvailabilityZone" : { "Fn::FindInMap" : [ "Region2AZs", { "Ref" : "AWS::Region" }, "AZ2" ] },
+          "Tags" : [ { "Key" : "Name", "Value" : "PublicAz2" } ]
+        }
+      },
+      "Az1PrivateSubnet" : {
+        "Type" : "AWS::EC2::Subnet",
+        "Properties" : {
+          "CidrBlock" : { "Ref" : "Az1PrivateCidrBlock" },
+          "VpcId" : { "Ref" : "VPC" },
+          "AvailabilityZone" : { "Fn::FindInMap" : [ "Region2AZs", { "Ref" : "AWS::Region" }, "AZ1" ] },
+          "Tags" : [ { "Key" : "Name", "Value" : "PrivateAz1" } ]
+        }
+      },
+      "Az2PrivateSubnet" : {
+        "Type" : "AWS::EC2::Subnet",
+        "Properties" : {
+          "CidrBlock" : { "Ref" : "Az2PrivateCidrBlock" },
+          "VpcId" : { "Ref" : "VPC" },
+          "AvailabilityZone" : { "Fn::FindInMap" : [ "Region2AZs", { "Ref" : "AWS::Region" }, "AZ2" ] },
+          "Tags" : [ { "Key" : "Name", "Value" : "PrivateAz2" } ]
+        }
+      },
+      "InternetGateway" : {
+        "Type" : "AWS::EC2::InternetGateway"
+      },
+      "GatewayToInternet" : {
+        "Type" : "AWS::EC2::VPCGatewayAttachment",
+        "Properties" : {
+          "VpcId" : { "Ref" : "VPC" },
+          "InternetGatewayId" : { "Ref" : "InternetGateway" }
+        }
+      },
+      "InstanceSecurityGroup" : {
+        "Type" : "AWS::EC2::SecurityGroup",
+        "Properties" : {
+          "GroupDescription" : "Allows inbound access for SSH connections", 
+          "VpcId" : { "Ref" : "VPC" },
+          "SecurityGroupIngress" : [{
+            "IpProtocol" : "tcp",
+            "FromPort" : "22",
+            "ToPort" : "22",
+            "CidrIp" : "0.0.0.0/0"
+          }]
+        }
+      },
+      "NatInstanceRole" : {
+        "Type" : "AWS::IAM::Role",
+        "Properties" : {
+          "AssumeRolePolicyDocument": {
+            "Version" : "2012-10-17",
+            "Statement" : [{
+              "Effect" : "Allow",
+              "Principal" : {
+                "Service" : [ "ec2.amazonaws.com" ]
+              },
+              "Action" : [ "sts:AssumeRole" ]
+            }]
+          },
+          "Path": "/",
+          "Policies" : [ {
+            "PolicyName" : "root",
+            "PolicyDocument" : {
+              "Version" : "2012-10-17",
+              "Statement": [
+              {
+                "Action": [
+                  "ec2:DescribeInstances",
+                  "ec2:CreateRoute",
+                  "ec2:ReplaceRoute",
+                  "ec2:StartInstances",
+                  "ec2:StopInstances"
+                ],
+                "Effect": "Allow",
+                "Resource": "*"
+              } ]
+            }
+          } ]
+        }
+      },
+      "NatInstanceProfile" : {
+        "Type" : "AWS::IAM::InstanceProfile",
+        "Properties" : {
+          "Path" : "/",
+          "Roles" : [{
+            "Ref" : "NatInstanceRole"
+          }]
+        }
+      },
+      "Az1NatInstance" : {
+        "Type" : "AWS::EC2::Instance",
+        "Properties" : {
+          "KeyName" : { "Ref" : "KeyName" },
+          "ImageId" : { "Fn::FindInMap" : [ "Region2Ami", { "Ref" : "AWS::Region" }, "AMI" ] },
+          "InstanceType" : { "Ref" : "NatInstanceType" },
+          "SubnetId" : { "Ref" : "Az1PublicSubnet" },
+          "SecurityGroupIds" : [ { "Ref" : "InstanceSecurityGroup" } ],
+          "IamInstanceProfile" : { "Ref" : "NatInstanceProfile" },
+          "SourceDestCheck" : "false",
+          "Tags" : [ { "Key" : "Name", "Value" : "Az1NatInstance"  } ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": [ "",
+                [
+                  "#!/bin/bash\n",
+                  "cd \\root\n",
+                  "yum update -y aws*\n",
+                  "# enable IP forwarding\n",
+                  "echo 1 > /proc/sys/net/ipv4/ip_forward\n",
+                  "echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects\n",
+                  "/sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE\n",
+                  "/sbin/iptables-save > /etc/sysconfig/iptables\n",
+                  "# ensure IP forwarding is enabled at boot time\n",
+                  "mkdir -p /etc/sysctl.d/\n",
+                  "cat <<EOF > /etc/sysctl.d/nat.conf\n",
+                    "net.ipv4.ip_forward = 1\n",
+                    "net.ipv4.conf.eth0.send_redirects = 0\n",
+                  "EOF\n"
+                ]
+              ]
+            }
+          }
+        }
+      },
+      "Az2NatInstance" : {
+        "Type" : "AWS::EC2::Instance",
+        "Properties" : {
+          "KeyName" : { "Ref" : "KeyName" },
+          "ImageId" : { "Fn::FindInMap" : [ "Region2Ami", { "Ref" : "AWS::Region" }, "AMI" ] },
+          "InstanceType" : { "Ref" : "NatInstanceType" },
+          "SubnetId" : { "Ref" : "Az2PublicSubnet" },
+          "SecurityGroupIds" : [ { "Ref" : "InstanceSecurityGroup" } ],
+          "IamInstanceProfile" : { "Ref" : "NatInstanceProfile" },
+          "SourceDestCheck" : "false",
+          "Tags" : [ { "Key" : "Name", "Value" : "Az2NatInstance"  } ],
+          "UserData": {
+            "Fn::Base64": {
+              "Fn::Join": [ "",
+                [
+                  "#!/bin/bash\n",
+                  "cd \\root\n",
+                  "yum update -y aws*\n",
+                  "# enable IP forwarding\n",
+                  "echo 1 > /proc/sys/net/ipv4/ip_forward\n",
+                  "echo 0 > /proc/sys/net/ipv4/conf/eth0/send_redirects\n",
+                  "/sbin/iptables -t nat -A POSTROUTING -o eth0 -s 0.0.0.0/0 -j MASQUERADE\n",
+                  "/sbin/iptables-save > /etc/sysconfig/iptables\n",
+                  "# ensure IP forwarding is enabled at boot time\n",
+                  "mkdir -p /etc/sysctl.d/\n",
+                  "cat <<EOF > /etc/sysctl.d/nat.conf\n",
+                    "net.ipv4.ip_forward = 1\n",
+                    "net.ipv4.conf.eth0.send_redirects = 0\n",
+                  "EOF\n"
+                ]
+              ]
+            }
+          }
+        }
+      },
+      "Az1NatInstanceEip" : {
+        "Type" : "AWS::EC2::EIP",
+        "DependsOn" : "GatewayToInternet",
+        "Properties" : {
+          "InstanceId" : { "Ref" : "Az1NatInstance" },
+          "Domain" : "vpc"
+        }
+      },
+      "Az2NatInstanceEip" : {
+        "Type" : "AWS::EC2::EIP",
+        "DependsOn" : "GatewayToInternet",
+        "Properties" : {
+          "InstanceId" : { "Ref" : "Az2NatInstance" },
+          "Domain" : "vpc"
+        }
+      },
+      "PublicRouteTable" : {
+        "Type" : "AWS::EC2::RouteTable",
+        "Properties" : {
+          "VpcId" : { "Ref" : "VPC" }
+        }
+      },
+      "PublicInternetRoute" : {
+        "Type" : "AWS::EC2::Route",
+        "Properties" : {
+          "DestinationCidrBlock" : "0.0.0.0/0",
+          "GatewayId" : { "Ref" : "InternetGateway" },
+          "RouteTableId" : { "Ref" : "PublicRouteTable" }
+        }
+      },
+      "Az1PublicRouteTableAssociation" : {
+        "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+        "Properties" : {
+          "SubnetId" : { "Ref" : "Az1PublicSubnet" },
+          "RouteTableId" : { "Ref" : "PublicRouteTable" }
+        }
+      },
+      "Az2PublicRouteTableAssociation" : {
+        "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+        "Properties" : {
+          "SubnetId" : { "Ref" : "Az2PublicSubnet" },
+          "RouteTableId" : { "Ref" : "PublicRouteTable" }
+        }
+      },
+      "Az1PrivateRouteTable" : {
+        "Type" : "AWS::EC2::RouteTable",
+        "Properties" : {
+          "VpcId" : { "Ref" : "VPC" }
+        }
+      },
+      "Az2PrivateRouteTable" : {
+        "Type" : "AWS::EC2::RouteTable",
+        "Properties" : {
+          "VpcId" : { "Ref" : "VPC" }
+        }
+      },
+      "Az1PrivateInternetRoute" : {
+        "Type" : "AWS::EC2::Route",
+        "Properties" : {
+          "DestinationCidrBlock" : "0.0.0.0/0",
+          "InstanceId" : { "Ref" : "Az1NatInstance" },
+          "RouteTableId" : { "Ref" : "Az1PrivateRouteTable" }
+        }
+      },
+      "Az2PrivateInternetRoute" : {
+        "Type" : "AWS::EC2::Route",
+        "Properties" : {
+          "DestinationCidrBlock" : "0.0.0.0/0",
+          "InstanceId" : { "Ref" : "Az2NatInstance" },
+          "RouteTableId" : { "Ref" : "Az2PrivateRouteTable" }
+        }
+      },
+      "Az1PrivateRouteTableAssociation" : {
+        "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+        "Properties" : {
+          "SubnetId" : { "Ref" : "Az1PrivateSubnet" },
+          "RouteTableId" : { "Ref" : "Az1PrivateRouteTable" }
+        }
+      },
+      "Az2PrivateRouteTableAssociation" : {
+        "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+        "Properties" : {
+          "SubnetId" : { "Ref" : "Az2PrivateSubnet" },
+          "RouteTableId" : { "Ref" : "Az2PrivateRouteTable" }
+        }
+      }
+    }
+  }
